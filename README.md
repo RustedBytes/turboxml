@@ -17,7 +17,7 @@ A fast, lightweight Python library for reading and writing XML files, powered by
 - **Thread-friendly** - Parsing and writing release the GIL, so multiple documents can be processed in parallel from Python threads.
 - **Clear errors** - Malformed XML raises `ValueError` with position information; a missing file raises `FileNotFoundError`.
 - **Type-safe** - Ships with a `.pyi` stub file for full editor autocompletion and type checking.
-- **Cross-platform** - Supports CPython and PyPy on Windows, macOS, and Linux.
+- **Cross-platform** - Wheels for CPython 3.10+ and PyPy 3.11 / 3.12 on Windows, macOS, and Linux.
 
 ## Installation
 
