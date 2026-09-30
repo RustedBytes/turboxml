@@ -1,0 +1,17 @@
+[package]
+name = "turboxml"
+version = "1.0.0"
+edition = "2024"
+
+[lib]
+name = "turboxml"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = "0.29.1"
+simdxml = "0.2.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

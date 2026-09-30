@@ -1,0 +1,51 @@
+[build-system]
+requires = ["maturin>=1.14.1"]
+build-backend = "maturin"
+
+[project]
+name = "turboxml"
+description = "A fast Python library for reading and writing XML files, powered by Rust."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "nephi-dev" },
+]
+keywords = ["xml", "parser", "rust", "pyo3", "fast"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Programming Language :: Rust",
+    "Topic :: Text Processing :: Markup :: XML",
+    "Typing :: Typed",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/RustedBytes/turboxml"
+Repository = "https://github.com/RustedBytes/turboxml"
+Issues = "https://github.com/RustedBytes/turboxml/issues"
+Changelog = "https://github.com/RustedBytes/turboxml/releases"
+
+[project.optional-dependencies]
+dev = [
+    "maturin>=1.14.1,<2.0",
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+include = [
+    { path = "py.typed", format = "wheel" },
+    { path = "turboxml.pyi", format = "wheel" },
+]
