@@ -1,7 +1,6 @@
 # turboxml
 
 [![PyPI version](https://img.shields.io/pypi/v/turboxml?color=%2334D058&label=pypi%20package)](https://pypi.org/project/turboxml)
-[![Python versions](https://img.shields.io/pypi/pyversions/turboxml.svg?color=%2334D058)](https://pypi.org/project/turboxml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A fast, lightweight Python library for reading and writing XML files, powered by Rust.
