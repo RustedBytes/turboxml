@@ -5,13 +5,13 @@
 
 A fast, lightweight Python library for reading and writing XML files, powered by Rust.
 
-`turboxml` provides up to **2× faster** XML parsing compared to Python's built-in `xml.etree.ElementTree`, with a simple and intuitive API.
+`turboxml` can parse typical structured XML around **1.5–2.5× faster** than Python's built-in `xml.etree.ElementTree`, with larger gains possible for text-heavy documents. Performance varies by workload and Python version.
 
 ---
 
 ## Features
 
-- **Fast** - Rust-powered XML parsing, up to 2× faster than the standard library.
+- **Fast** - Rust-powered XML parsing that is typically 1.5–2.5× faster than the standard library for structured documents, with results varying by workload and Python version.
 - **Simple API** - Read, traverse, and write XML with minimal boilerplate.
 - **Thread-friendly** - Parsing and writing release the GIL, so multiple documents can be processed in parallel from Python threads.
 - **Clear errors** - Malformed XML raises `ValueError` with position information; a missing file raises `FileNotFoundError`.
