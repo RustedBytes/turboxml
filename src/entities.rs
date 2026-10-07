@@ -1,5 +1,9 @@
 use crate::f_str;
-use pyo3::{prelude::*, types::PyType};
+use crate::storage::XmlText;
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyType},
+};
 use std::collections::HashMap;
 
 #[derive(Clone, FromPyObject, IntoPyObject, Eq, PartialEq, Debug)]
@@ -20,21 +24,18 @@ pub enum SearchType {
 
 /// Plain, GIL-free tree used for parsing and serialization off the GIL.
 pub struct RawNode {
-    pub name: String,
-    pub attrs: HashMap<String, String>,
+    pub name: XmlText,
+    pub attrs: HashMap<XmlText, XmlText>,
     pub children: Vec<RawNode>,
-    pub text: Option<String>,
+    pub text: Option<XmlText>,
 }
 
 #[pyclass]
 pub struct Node {
-    #[pyo3(get)]
-    pub name: String,
-    #[pyo3(get)]
-    pub attrs: HashMap<String, String>,
+    pub name: XmlText,
+    pub attrs: HashMap<XmlText, XmlText>,
     pub children: Vec<Py<Node>>,
-    #[pyo3(get)]
-    pub text: Option<String>,
+    pub text: Option<XmlText>,
 }
 
 impl Node {
@@ -100,11 +101,34 @@ impl Node {
         text: Option<String>,
     ) -> PyResult<Self> {
         Ok(Node {
-            name,
-            attrs: attrs.unwrap_or_default(),
+            name: name.into(),
+            attrs: attrs
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
             children: children.unwrap_or_default(),
-            text,
+            text: text.map(Into::into),
         })
+    }
+
+    #[getter]
+    fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    #[getter]
+    fn text(&self) -> Option<&str> {
+        self.text.as_deref()
+    }
+
+    #[getter]
+    fn attrs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let result = PyDict::new(py);
+        for (key, value) in &self.attrs {
+            result.set_item(key.as_str(), value.as_str())?;
+        }
+        Ok(result)
     }
 
     /// Children are shared references to the same nodes, not copies.
@@ -229,17 +253,28 @@ impl Node {
             _ => None,
         };
         Ok(Self {
-            name,
-            attrs,
+            name: name.into(),
+            attrs: attrs
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
             children,
-            text,
+            text: text.map(Into::into),
         })
     }
 
     pub fn to_dict(&self, py: Python<'_>) -> HashMap<String, HashmapTypes> {
         HashMap::from([
-            (f_str!("name"), HashmapTypes::String(self.name.clone())),
-            (f_str!("attrs"), HashmapTypes::Map(self.attrs.clone())),
+            (f_str!("name"), HashmapTypes::String(self.name.to_string())),
+            (
+                f_str!("attrs"),
+                HashmapTypes::Map(
+                    self.attrs
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                ),
+            ),
             (
                 f_str!("children"),
                 HashmapTypes::Vec(
@@ -251,7 +286,7 @@ impl Node {
             ),
             (
                 f_str!("text"),
-                HashmapTypes::NullableString(self.text.clone()),
+                HashmapTypes::NullableString(self.text.as_ref().map(ToString::to_string)),
             ),
         ])
     }

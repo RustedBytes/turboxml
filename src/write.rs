@@ -160,24 +160,27 @@ mod tests {
     use std::fs::{read_to_string, remove_file};
     fn root_node() -> RawNode {
         let mut attrs = HashMap::new();
-        attrs.insert(f_str!("test"), f_str!("test"));
+        attrs.insert(f_str!("test").into(), f_str!("test").into());
         let mut root = RawNode {
-            name: f_str!("root"),
+            name: f_str!("root").into(),
             attrs: attrs.clone(),
             children: Vec::new(),
             text: None,
         };
         let mut child = RawNode {
-            name: f_str!("child"),
-            attrs,
+            name: f_str!("child").into(),
+            attrs: attrs
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
             children: Vec::new(),
             text: None,
         };
         child.children.push(RawNode {
-            name: f_str!("child"),
+            name: f_str!("child").into(),
             attrs: HashMap::new(),
             children: Vec::new(),
-            text: Some(f_str!("test")),
+            text: Some(f_str!("test").into()),
         });
         root.children.push(child);
         root
@@ -224,7 +227,7 @@ mod tests {
     #[test]
     fn test_write_self_closing_tag() {
         let mut root = RawNode {
-            name: f_str!("root"),
+            name: f_str!("root").into(),
             attrs: HashMap::new(),
             children: Vec::new(),
             text: None,
@@ -232,8 +235,11 @@ mod tests {
         let mut attrs = HashMap::new();
         attrs.insert(f_str!("attr"), f_str!("value"));
         root.children.push(RawNode {
-            name: f_str!("child"),
-            attrs,
+            name: f_str!("child").into(),
+            attrs: attrs
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
             children: Vec::new(),
             text: None,
         });
@@ -250,10 +256,13 @@ mod tests {
         let mut attrs = HashMap::new();
         attrs.insert(f_str!("attr"), f_str!("a & b"));
         let root = RawNode {
-            name: f_str!("root"),
-            attrs,
+            name: f_str!("root").into(),
+            attrs: attrs
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
             children: Vec::new(),
-            text: Some(f_str!("1 < 2 & 3")),
+            text: Some(f_str!("1 < 2 & 3").into()),
         };
         Python::initialize();
         Python::attach(|py| {
@@ -277,8 +286,11 @@ mod tests {
         let mut attrs = HashMap::new();
         attrs.insert(f_str!("attr"), f_str!("line1\nline2\tend"));
         let root = RawNode {
-            name: f_str!("root"),
-            attrs,
+            name: f_str!("root").into(),
+            attrs: attrs
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
             children: Vec::new(),
             text: None,
         };

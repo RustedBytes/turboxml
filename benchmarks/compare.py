@@ -26,8 +26,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--before', type=Path, required=True)
     ap.add_argument('--after', type=Path, required=True)
+    ap.add_argument('--traverse', action='store_true', help='Include reading every field through the public API')
+    ap.add_argument('--iterations', type=int, default=10)
     ap.add_argument('--output', type=Path, default=Path('target/comparison.json'))
     args = ap.parse_args()
+    if args.iterations < 1:
+        ap.error("iterations must be positive")
     before = load_extension(args.before)
     after = load_extension(args.after)
     parsers = [
@@ -41,15 +45,21 @@ def main():
         for label, parse in parsers:
             if signature(parse(xml), label != 'ElementTree') != expected:
                 raise ValueError(f'Unequal output: {name} / {label}')
+        timed_parsers = parsers
+        if args.traverse:
+            timed_parsers = [
+                (label, lambda xml, parse=parse, turbo=label != 'ElementTree': signature(parse(xml), turbo))
+                for label, parse in parsers
+            ]
         samples = {label: [] for label, _ in parsers}
         gc.collect()
         enabled = gc.isenabled()
         gc.disable()
         try:
             for batch in range(36):
-                order = parsers[batch % 3:] + parsers[:batch % 3]
+                order = timed_parsers[batch % 3:] + timed_parsers[:batch % 3]
                 for label, parse in order:
-                    value = measure(parse, xml, 10)
+                    value = measure(parse, xml, args.iterations)
                     if batch >= 5:
                         samples[label].append(value)
         finally:
@@ -76,7 +86,8 @@ def main():
         'timestamp_utc': datetime.now(timezone.utc).isoformat(),
         'warmup_batches': 5,
         'repeats': 31,
-        'iterations_per_batch': 10,
+        'iterations_per_batch': args.iterations,
+        'metric': 'parse, all public fields, destruction' if args.traverse else 'parse and destruction',
         'before_module': str(args.before),
         'after_module': str(args.after),
         'workloads': rows,

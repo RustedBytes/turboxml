@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 mod common;
 mod entities;
 mod read;
+mod storage;
 mod write;
 
 #[pymodule]

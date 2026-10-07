@@ -12,6 +12,8 @@ use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 
 use crate::entities::{Node, RawNode};
+use crate::storage::{Source, XmlText};
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -147,7 +149,8 @@ fn parse_attrs(
     body: &str,
     offset: usize,
     hash_state: &RandomState,
-) -> Result<HashMap<String, String>, ParseError> {
+    source: &Arc<Source>,
+) -> Result<HashMap<XmlText, XmlText>, ParseError> {
     let mut map = HashMap::with_hasher(hash_state.clone());
     let bytes = body.as_bytes();
     let mut pos = 0;
@@ -209,8 +212,8 @@ fn parse_attrs(
                 "'<' is not allowed in attribute values",
             ));
         }
-        let value = unescape(raw, offset + value_start, true)?.into_owned();
-        match map.entry(key.to_string()) {
+        let value = XmlText::from_cow(source, unescape(raw, offset + value_start, true)?);
+        match map.entry(XmlText::view(source, key)) {
             Entry::Occupied(_) => {
                 return Err(syntax(
                     offset + key_start,
@@ -251,11 +254,12 @@ fn node_from_tag(
     index: &XmlIndex<'_>,
     i: usize,
     hash_state: &RandomState,
+    source: &Arc<Source>,
 ) -> Result<RawNode, ParseError> {
     let (name, body, offset) = element_parts(xml, index, i)?;
     Ok(RawNode {
-        name: name.to_string(),
-        attrs: parse_attrs(body, offset, hash_state)?,
+        name: XmlText::view(source, name),
+        attrs: parse_attrs(body, offset, hash_state, source)?,
         children: Vec::new(),
         text: None,
     })
@@ -279,15 +283,15 @@ impl<'a> Frame<'a> {
         }
     }
 
-    fn finish(self) -> RawNode {
+    fn finish(self, source: &Arc<Source>) -> RawNode {
         let mut node = self.node;
         if let Some(text) = self.text {
             let trimmed = text.trim();
             if !trimmed.is_empty() {
-                node.text = Some(if trimmed.len() == text.len() {
-                    text.into_owned()
-                } else {
-                    trimmed.to_owned()
+                node.text = Some(match text {
+                    Cow::Borrowed(text) => XmlText::view(source, text.trim()),
+                    Cow::Owned(text) if trimmed.len() == text.len() => text.into(),
+                    Cow::Owned(_) => trimmed.to_owned().into(),
                 });
             }
         }
@@ -310,7 +314,8 @@ fn build_index(xml: &str) -> Result<XmlIndex<'_>, ParseError> {
 /// without checking well-formedness, so this walk validates nesting (matching
 /// by depth, not tag name, keeps children that share an ancestor's name
 /// intact), tag terminators and attribute syntax while building the tree.
-fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
+fn parse_str(source: &Arc<Source>, root_tag: &str) -> Result<RawNode, ParseError> {
+    let xml = source.as_str();
     let index = build_index(xml)?;
     // Keep randomized hashing, but initialize its state once per document.
     let hash_state = RandomState::new();
@@ -346,13 +351,13 @@ fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
                     outer.push(element_parts(xml, &index, i)?.0);
                 } else {
                     stack.push(Frame {
-                        node: node_from_tag(xml, &index, i, &hash_state)?,
+                        node: node_from_tag(xml, &index, i, &hash_state, source)?,
                         text: None,
                     });
                 }
             }
             TagType::SelfClose => {
-                let node = node_from_tag(xml, &index, i, &hash_state)?;
+                let node = node_from_tag(xml, &index, i, &hash_state, source)?;
                 match stack.last_mut() {
                     Some(frame) => {
                         if frame.node.children.is_empty() {
@@ -383,7 +388,7 @@ fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
                 }
                 match stack.pop() {
                     Some(frame) => {
-                        let node = frame.finish();
+                        let node = frame.finish(source);
                         match stack.last_mut() {
                             Some(parent) => {
                                 if parent.node.children.is_empty() {
@@ -427,7 +432,7 @@ fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
 
     match stack.pop() {
         Some(frame) => Err(ParseError::UnexpectedEof {
-            tag: frame.node.name,
+            tag: frame.node.name.to_string(),
         }),
         None => Err(ParseError::RootTagNotFound {
             root_tag: root_tag.to_string(),
@@ -439,7 +444,7 @@ fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
 pub fn read_file(py: Python<'_>, file_path: String, root_tag: String) -> PyResult<Py<Node>> {
     let raw = py.detach(|| -> PyResult<RawNode> {
         let file_str = fs::read_to_string(&file_path)?;
-        Ok(parse_str(&file_str, &root_tag)?)
+        Ok(parse_str(&Arc::new(Source::File(file_str)), &root_tag)?)
     })?;
     Node::from_raw(py, raw)
 }
@@ -450,7 +455,8 @@ pub fn read_string(
     xml_string: PyBackedStr,
     root_tag: String,
 ) -> PyResult<Py<Node>> {
-    let raw = py.detach(|| parse_str(&xml_string, &root_tag))?;
+    let source = Arc::new(Source::Python(xml_string));
+    let raw = py.detach(|| parse_str(&source, &root_tag))?;
     Node::from_raw(py, raw)
 }
 
@@ -644,6 +650,29 @@ mod tests {
                 assert_eq!(handle.borrow(py).text.as_deref(), expected, "{xml}");
             }
         });
+    }
+
+    #[test]
+    fn test_plain_fields_are_views_and_decoded_fields_are_owned() {
+        use crate::storage::{Source, XmlText};
+        use std::sync::Arc;
+        let source = Arc::new(Source::File(
+            "<root plain='Україна' escaped='a&amp;b'> text <child/></root>".into(),
+        ));
+        let raw = super::parse_str(&source, "root").unwrap();
+        assert!(matches!(raw.name, XmlText::View { .. }));
+        assert!(matches!(raw.text, Some(XmlText::View { .. })));
+        assert!(
+            raw.attrs
+                .keys()
+                .all(|key| matches!(key, XmlText::View { .. }))
+        );
+        assert!(matches!(raw.attrs.get("plain"), Some(XmlText::View { .. })));
+        assert!(matches!(raw.attrs.get("escaped"), Some(XmlText::Owned(_))));
+        drop(source);
+        assert_eq!(raw.name, "root");
+        assert_eq!(raw.text.as_deref(), Some("text"));
+        assert_eq!(raw.attrs.get("escaped").unwrap(), "a&b");
     }
 
     #[test]

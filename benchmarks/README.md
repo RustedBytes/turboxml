@@ -77,3 +77,54 @@ guarantee. These results do not establish a typical 1.5–2.5× structured-XML
 speedup across documents and machines. No raw results JSON is tracked.
 
 Optimized `src/read.rs` SHA-256: `240e0a821c71b5d615e4f6f5bf2032e532af8e1a4b9fa0025f0966c71dcf260c`.
+
+## Shared-buffer string storage
+
+Parsed tag names, attribute keys/plain values and single plain-text segments
+refer to byte ranges in one immutable owned input buffer. There are no separate
+Rust string allocations for these fields. Entity decoding, attribute whitespace
+normalization and joining separate text segments still allocate owned buffers.
+This is not a zero-allocation tree: the structural index, HashMaps, child vectors,
+shared owner and Python Node objects still allocate. Python property access
+materializes Python strings/dicts, and `to_dict()` materializes the whole tree.
+
+A surviving node keeps the entire document buffer alive, including when a small
+subtree was selected. To retain only a copied subtree, use
+`copy = turboxml.Node.from_dict(node.to_dict())` and release the original nodes.
+Nodes constructed with Node/Node.from_dict use independent owned strings.
+
+## Recorded zero-copy comparison
+
+Baseline: PR commit `8c22a02eca5c6f07979d8e8d214ca1085bf17a9a`. Both builds use
+locked dependencies, release profile and pyo3/extension-module. CPython 3.12.14,
+Linux x86-64, AMD EPYC 9V74, 2026-10-07; same-process rotating parser order,
+5 warmup batches and 31 measured batches of 10 calls, including destruction.
+Results are one run in a shared virtualized environment.
+
+| Input | Before median / p95 (ms) | After median / p95 (ms) | ET median / p95 (ms) | Before / after median | ET / after median |
+|---|---:|---:|---:|---:|---:|
+| structured-attributes | 17.797 / 21.606 | 14.158 / 17.536 | 21.517 / 25.428 | 1.257× | 1.520× |
+| deep-nested | 6.453 / 7.863 | 5.881 / 6.463 | 6.527 / 7.698 | 1.097× | 1.110× |
+| text-heavy | 1.287 / 1.453 | 0.934 / 1.236 | 11.261 / 13.619 | 1.378× | 12.055× |
+
+Also test public-field materialization so parse-only gains are not confused with
+an entire consumer pipeline. This mode runs the same full-tree signature walk
+for both builds and ElementTree, including every name, attribute and text:
+
+```sh
+python benchmarks/compare.py --before /path/to/before/turboxml.so --after /path/to/after/turboxml.so --traverse --iterations 1
+```
+
+Recorded with 5 warmup / 31 measured batches of 1 call:
+
+| Input | Before median / p95 (ms) | After median / p95 (ms) | Before / after median |
+|---|---:|---:|---:|
+| structured-attributes | 54.072 / 73.102 | 51.580 / 72.130 | 1.048× |
+| deep-nested | 21.530 / 28.604 | 21.814 / 27.672 | 0.987× |
+| text-heavy | 4.845 / 5.686 | 4.366 / 4.859 | 1.110× |
+
+Nested traversal is slightly slower in this run; the difference is small and
+may be noise. The largest parse-only gains do not carry through unchanged to
+full materialization. All JSON output remains local under ignored `target/`.
+
+Zero-copy `src/read.rs` SHA-256: `9474ee090887c6f26c40fa033335d9380a1f6810a6f33aad62f9cc110670bb6a`.

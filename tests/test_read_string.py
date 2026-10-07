@@ -1,5 +1,8 @@
 """Regression coverage for Python-owned input storage while parsing off the GIL."""
 import unittest
+import gc
+import os
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 import turboxml
@@ -25,6 +28,40 @@ class ReadStringTests(unittest.TestCase):
         )
         self.assertEqual(root.text, 'abc&de')
         self.assertEqual(root.children[0].name, 'child')
+
+
+    def test_child_retains_document_after_root_and_input_are_dropped(self):
+        xml = '<root><child key="Україна"> значення </child></root>'
+        root = turboxml.read_string(xml, 'root')
+        child = root.children[0]
+        del xml, root
+        gc.collect()
+        self.assertEqual(child.name, 'child')
+        self.assertEqual(child.attrs, {'key': 'Україна'})
+        self.assertEqual(child.text, 'значення')
+        snapshot = child.attrs
+        snapshot['key'] = 'changed'
+        self.assertEqual(child.attrs['key'], 'Україна')
+        self.assertEqual(child.to_dict()['text'], 'значення')
+        self.assertIn('значення', turboxml.write_string(child))
+        copied = turboxml.Node.from_dict(child.to_dict())
+        del child
+        gc.collect()
+        self.assertEqual(copied.text, 'значення')
+        self.assertEqual(copied.attrs, {'key': 'Україна'})
+
+    def test_file_buffer_survives_return_and_file_removal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, 'document.xml')
+            with open(path, 'w', encoding='utf-8') as file:
+                file.write('<root a="value"><child>Україна</child></root>')
+            root = turboxml.read_file(path, 'root')
+            child = root.children[0]
+            os.remove(path)
+        del root
+        gc.collect()
+        self.assertEqual(child.name, 'child')
+        self.assertEqual(child.text, 'Україна')
 
 
 if __name__ == '__main__':
