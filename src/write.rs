@@ -169,10 +169,7 @@ mod tests {
         };
         let mut child = RawNode {
             name: f_str!("child").into(),
-            attrs: attrs
-                .into_iter()
-                .map(|(k, v)| (k.into(), v.into()))
-                .collect(),
+            attrs,
             children: Vec::new(),
             text: None,
         };
