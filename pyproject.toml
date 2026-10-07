@@ -24,6 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
     "Programming Language :: Rust",
@@ -36,7 +37,7 @@ dynamic = ["version"]
 Homepage = "https://github.com/RustedBytes/turboxml"
 Repository = "https://github.com/RustedBytes/turboxml"
 Issues = "https://github.com/RustedBytes/turboxml/issues"
-Changelog = "https://github.com/RustedBytes/turboxml/releases"
+Changelog = "https://github.com/RustedBytes/turboxml/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [

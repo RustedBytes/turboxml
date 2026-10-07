@@ -1,6 +1,6 @@
 [package]
 name = "turboxml"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 
 [lib]
@@ -17,6 +17,9 @@ simdxml = "0.2.1"
 [patch.crates-io]
 pyo3-build-config = { git = "https://github.com/PyO3/pyo3", rev = "dd54cd6e129439ab2c5d98ff11f06f1e0ea85cd6" }
 pyo3-ffi = { git = "https://github.com/PyO3/pyo3", rev = "dd54cd6e129439ab2c5d98ff11f06f1e0ea85cd6" }
+
+[lints.clippy]
+pedantic = "warn"
 
 [profile.release]
 lto = "thin"

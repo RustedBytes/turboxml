@@ -1,5 +1,9 @@
 use crate::f_str;
-use pyo3::{prelude::*, types::PyType};
+use crate::storage::XmlText;
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyType},
+};
 use std::collections::HashMap;
 
 #[derive(Clone, FromPyObject, IntoPyObject, Eq, PartialEq, Debug)]
@@ -20,21 +24,18 @@ pub enum SearchType {
 
 /// Plain, GIL-free tree used for parsing and serialization off the GIL.
 pub struct RawNode {
-    pub name: String,
-    pub attrs: HashMap<String, String>,
+    pub name: XmlText,
+    pub attrs: HashMap<XmlText, XmlText>,
     pub children: Vec<RawNode>,
-    pub text: Option<String>,
+    pub text: Option<XmlText>,
 }
 
 #[pyclass]
 pub struct Node {
-    #[pyo3(get)]
-    pub name: String,
-    #[pyo3(get)]
-    pub attrs: HashMap<String, String>,
+    pub name: XmlText,
+    pub attrs: HashMap<XmlText, XmlText>,
     pub children: Vec<Py<Node>>,
-    #[pyo3(get)]
-    pub text: Option<String>,
+    pub text: Option<XmlText>,
 }
 
 impl Node {
@@ -98,13 +99,36 @@ impl Node {
         attrs: Option<HashMap<String, String>>,
         children: Option<Vec<Py<Node>>>,
         text: Option<String>,
-    ) -> PyResult<Self> {
-        Ok(Node {
-            name,
-            attrs: attrs.unwrap_or_default(),
+    ) -> Self {
+        Node {
+            name: name.into(),
+            attrs: attrs
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
             children: children.unwrap_or_default(),
-            text,
-        })
+            text: text.map(Into::into),
+        }
+    }
+
+    #[getter]
+    fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    #[getter]
+    fn text(&self) -> Option<&str> {
+        self.text.as_deref()
+    }
+
+    #[getter]
+    fn attrs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let result = PyDict::new(py);
+        for (key, value) in &self.attrs {
+            result.set_item(key.as_str(), value.as_str())?;
+        }
+        Ok(result)
     }
 
     /// Children are shared references to the same nodes, not copies.
@@ -119,27 +143,27 @@ impl Node {
     #[pyo3(signature = (spacing=None))]
     fn __to_string(&self, py: Python<'_>, spacing: Option<u8>) -> String {
         use std::fmt::Write as _;
-        let _spacing = spacing.unwrap_or(0);
-        let spaces = " ".repeat(_spacing as usize);
+        let spacing = spacing.unwrap_or(0);
+        let spaces = " ".repeat(usize::from(spacing));
         let mut s = String::new();
         let _ = write!(s, "{}Name: {}", spaces, self.name);
         if !self.attrs.is_empty() {
-            let _ = write!(s, "\n{}Attributes:", spaces);
+            let _ = write!(s, "\n{spaces}Attributes:");
             for (k, v) in &self.attrs {
-                let _ = write!(s, "\n{}{}: {}", spaces, k, v);
+                let _ = write!(s, "\n{spaces}{k}: {v}");
             }
         }
         if let Some(text) = &self.text {
-            let _ = write!(s, "\n{}Text: {}", spaces, text);
+            let _ = write!(s, "\n{spaces}Text: {text}");
         }
         if !self.children.is_empty() {
-            let _ = write!(s, "\n{}Children:", spaces);
+            let _ = write!(s, "\n{spaces}Children:");
             for child in &self.children {
                 let _ = write!(
                     s,
                     "\n{}{}\n",
                     spaces,
-                    child.borrow(py).__to_string(py, Some(_spacing + 2))
+                    child.borrow(py).__to_string(py, Some(spacing + 2))
                 );
             }
         }
@@ -190,6 +214,7 @@ impl Node {
         nodes
     }
     #[pyo3(signature = (by, value, depth=None))]
+    #[allow(clippy::needless_pass_by_value)] // PyO3 extracts the search enum by value.
     pub fn search(
         slf: &Bound<'_, Self>,
         by: SearchType,
@@ -208,13 +233,11 @@ impl Node {
         cls: &Bound<'_, PyType>,
         mut dict_: HashMap<String, HashmapTypes>,
     ) -> PyResult<Self> {
-        let name = match dict_.remove("name") {
-            Some(HashmapTypes::String(n)) => n,
-            _ => return Err(pyo3::exceptions::PyValueError::new_err("Invalid name")),
+        let Some(HashmapTypes::String(name)) = dict_.remove("name") else {
+            return Err(pyo3::exceptions::PyValueError::new_err("Invalid name"));
         };
-        let attrs = match dict_.remove("attrs") {
-            Some(HashmapTypes::Map(a)) => a,
-            _ => return Err(pyo3::exceptions::PyValueError::new_err("Invalid attrs")),
+        let Some(HashmapTypes::Map(attrs)) = dict_.remove("attrs") else {
+            return Err(pyo3::exceptions::PyValueError::new_err("Invalid attrs"));
         };
         let children = match dict_.remove("children") {
             Some(HashmapTypes::Vec(c)) => c,
@@ -229,17 +252,28 @@ impl Node {
             _ => None,
         };
         Ok(Self {
-            name,
-            attrs,
+            name: name.into(),
+            attrs: attrs
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
             children,
-            text,
+            text: text.map(Into::into),
         })
     }
 
     pub fn to_dict(&self, py: Python<'_>) -> HashMap<String, HashmapTypes> {
         HashMap::from([
-            (f_str!("name"), HashmapTypes::String(self.name.clone())),
-            (f_str!("attrs"), HashmapTypes::Map(self.attrs.clone())),
+            (f_str!("name"), HashmapTypes::String(self.name.to_string())),
+            (
+                f_str!("attrs"),
+                HashmapTypes::Map(
+                    self.attrs
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                ),
+            ),
             (
                 f_str!("children"),
                 HashmapTypes::Vec(
@@ -251,7 +285,7 @@ impl Node {
             ),
             (
                 f_str!("text"),
-                HashmapTypes::NullableString(self.text.clone()),
+                HashmapTypes::NullableString(self.text.as_ref().map(ToString::to_string)),
             ),
         ])
     }
@@ -277,8 +311,7 @@ mod tests {
                 Some(attrs.clone()),
                 Some(Vec::new()),
                 Some(f_str!("test")),
-            )
-            .unwrap();
+            );
             assert_eq!(node.name, String::from("test"));
             assert_eq!(node.attrs.len(), 1);
             assert_eq!(node.attrs.get("test").unwrap(), "test");
@@ -289,15 +322,13 @@ mod tests {
                 Some(attrs.clone()),
                 Some(Vec::new()),
                 Some(f_str!("test")),
-            )
-            .unwrap();
+            );
             let second_child_node = Node::new(
                 f_str!("test new"),
                 Some(attrs),
                 Some(Vec::new()),
                 Some(f_str!("test")),
-            )
-            .unwrap();
+            );
             child_node
                 .children
                 .push(Py::new(py, second_child_node).unwrap());
@@ -364,15 +395,13 @@ mod tests {
                 Some(attrs.clone()),
                 Some(Vec::new()),
                 Some(f_str!("test")),
-            )
-            .unwrap();
+            );
             let child_node = Node::new(
                 f_str!("test new"),
                 Some(attrs.clone()),
                 Some(Vec::new()),
                 Some(f_str!("test")),
-            )
-            .unwrap();
+            );
             node.children.push(Py::new(py, child_node).unwrap());
             let hash = node.to_dict(py);
             assert_eq!(

@@ -1,16 +1,19 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::pybacked::PyBackedStr;
 
 use simdxml::index::TagType;
 use simdxml::{SimdXmlError, XmlIndex};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
+use std::collections::hash_map::{Entry, RandomState};
 use std::fmt;
 use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 
 use crate::entities::{Node, RawNode};
+use crate::storage::{Source, XmlText};
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -142,8 +145,13 @@ fn resolve_entity(name: &str, position: usize) -> Result<char, ParseError> {
 /// Parses the attributes of a start tag. `body` is the text after the tag
 /// name up to (not including) the closing `>` or `/>`, and starts at byte
 /// `offset` of the document.
-fn parse_attrs(body: &str, offset: usize) -> Result<HashMap<String, String>, ParseError> {
-    let mut map = HashMap::new();
+fn parse_attrs(
+    body: &str,
+    offset: usize,
+    hash_state: &RandomState,
+    source: &Arc<Source>,
+) -> Result<HashMap<XmlText, XmlText>, ParseError> {
+    let mut map = HashMap::with_hasher(hash_state.clone());
     let bytes = body.as_bytes();
     let mut pos = 0;
     loop {
@@ -181,14 +189,11 @@ fn parse_attrs(body: &str, offset: usize) -> Result<HashMap<String, String>, Par
         while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
             pos += 1;
         }
-        let quote = match bytes.get(pos) {
-            Some(&q @ (b'"' | b'\'')) => q,
-            _ => {
-                return Err(syntax(
-                    offset + pos,
-                    format!("value of attribute '{key}' is not quoted"),
-                ));
-            }
+        let Some(&quote @ (b'"' | b'\'')) = bytes.get(pos) else {
+            return Err(syntax(
+                offset + pos,
+                format!("value of attribute '{key}' is not quoted"),
+            ));
         };
         pos += 1;
         let value_start = pos;
@@ -204,8 +209,8 @@ fn parse_attrs(body: &str, offset: usize) -> Result<HashMap<String, String>, Par
                 "'<' is not allowed in attribute values",
             ));
         }
-        let value = unescape(raw, offset + value_start, true)?.into_owned();
-        match map.entry(key.to_string()) {
+        let value = XmlText::from_cow(source, unescape(raw, offset + value_start, true)?);
+        match map.entry(XmlText::view(source, key)) {
             Entry::Occupied(_) => {
                 return Err(syntax(
                     offset + key_start,
@@ -220,15 +225,20 @@ fn parse_attrs(body: &str, offset: usize) -> Result<HashMap<String, String>, Par
     }
 }
 
-/// Validates an element tag at index `i` and returns its name and the byte
-/// range of its attribute section.
+/// Converts an index offset without truncation on 32-bit targets.
+fn byte_offset(offset: u64) -> Result<usize, ParseError> {
+    usize::try_from(offset)
+        .map_err(|_| syntax(0, "XML index offset exceeds addressable input size"))
+}
+
+/// Validates an element tag and returns its name and attribute byte range.
 fn element_parts<'a>(
     xml: &'a str,
     index: &XmlIndex<'a>,
     i: usize,
 ) -> Result<(&'a str, &'a str, usize), ParseError> {
-    let start = index.tag_starts[i] as usize;
-    let end = index.tag_ends[i] as usize;
+    let start = byte_offset(index.tag_starts[i])?;
+    let end = byte_offset(index.tag_ends[i])?;
     let name = index.tag_name(i);
     if name.is_empty() {
         return Err(syntax(start, "expected element name after '<'"));
@@ -241,11 +251,17 @@ fn element_parts<'a>(
     Ok((name, &xml[body_start..body_end], body_start))
 }
 
-fn node_from_tag(xml: &str, index: &XmlIndex<'_>, i: usize) -> Result<RawNode, ParseError> {
+fn node_from_tag(
+    xml: &str,
+    index: &XmlIndex<'_>,
+    i: usize,
+    hash_state: &RandomState,
+    source: &Arc<Source>,
+) -> Result<RawNode, ParseError> {
     let (name, body, offset) = element_parts(xml, index, i)?;
     Ok(RawNode {
-        name: name.to_string(),
-        attrs: parse_attrs(body, offset)?,
+        name: XmlText::view(source, name),
+        attrs: parse_attrs(body, offset, hash_state, source)?,
         children: Vec::new(),
         text: None,
     })
@@ -253,17 +269,33 @@ fn node_from_tag(xml: &str, index: &XmlIndex<'_>, i: usize) -> Result<RawNode, P
 
 /// An element under construction. Text is accumulated across text segments,
 /// entity references and CDATA sections, and trimmed once on close.
-struct Frame {
+struct Frame<'a> {
     node: RawNode,
-    text: String,
+    text: Option<Cow<'a, str>>,
 }
 
-impl Frame {
-    fn finish(self) -> RawNode {
+impl<'a> Frame<'a> {
+    fn append_text(&mut self, text: Cow<'a, str>) {
+        if text.is_empty() {
+            return;
+        }
+        match &mut self.text {
+            Some(existing) => existing.to_mut().push_str(&text),
+            None => self.text = Some(text),
+        }
+    }
+
+    fn finish(self, source: &Arc<Source>) -> RawNode {
         let mut node = self.node;
-        let text = self.text.trim();
-        if !text.is_empty() {
-            node.text = Some(text.to_string());
+        if let Some(text) = self.text {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                node.text = Some(match text {
+                    Cow::Borrowed(text) => XmlText::view(source, text.trim()),
+                    Cow::Owned(text) if trimmed.len() == text.len() => text.into(),
+                    Cow::Owned(_) => trimmed.to_owned().into(),
+                });
+            }
         }
         node
     }
@@ -284,8 +316,12 @@ fn build_index(xml: &str) -> Result<XmlIndex<'_>, ParseError> {
 /// without checking well-formedness, so this walk validates nesting (matching
 /// by depth, not tag name, keeps children that share an ancestor's name
 /// intact), tag terminators and attribute syntax while building the tree.
-fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
+#[allow(clippy::too_many_lines)] // Keep the ordered XML state-machine transitions in one walk.
+fn parse_str(source: &Arc<Source>, root_tag: &str) -> Result<RawNode, ParseError> {
+    let xml = source.as_str();
     let index = build_index(xml)?;
+    // Keep randomized hashing, but initialize its state once per document.
+    let hash_state = RandomState::new();
     let ranges = &index.text_ranges;
     let mut next_text = 0;
     // Open elements outside the requested root; only names are needed.
@@ -294,23 +330,21 @@ fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
     let mut stack: Vec<Frame> = Vec::new();
 
     for i in 0..index.tag_count() {
-        let start = index.tag_starts[i] as usize;
-        let end = index.tag_ends[i] as usize;
+        let start = byte_offset(index.tag_starts[i])?;
+        let end = byte_offset(index.tag_ends[i])?;
         if end >= xml.len() {
             return Err(syntax(start, "unterminated markup"));
         }
 
-        while next_text < ranges.len() && (ranges[next_text].start as usize) < start {
+        while next_text < ranges.len() && (byte_offset(ranges[next_text].start)?) < start {
             let range = &ranges[next_text];
             next_text += 1;
             if let Some(frame) = stack.last_mut() {
                 let raw = index.text_content(range);
                 if let Some(j) = raw.find('<') {
-                    return Err(syntax(range.start as usize + j, "unexpected '<'"));
+                    return Err(syntax(byte_offset(range.start)? + j, "unexpected '<'"));
                 }
-                frame
-                    .text
-                    .push_str(&unescape(raw, range.start as usize, false)?);
+                frame.append_text(unescape(raw, byte_offset(range.start)?, false)?);
             }
         }
 
@@ -320,15 +354,20 @@ fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
                     outer.push(element_parts(xml, &index, i)?.0);
                 } else {
                     stack.push(Frame {
-                        node: node_from_tag(xml, &index, i)?,
-                        text: String::new(),
+                        node: node_from_tag(xml, &index, i, &hash_state, source)?,
+                        text: None,
                     });
                 }
             }
             TagType::SelfClose => {
-                let node = node_from_tag(xml, &index, i)?;
+                let node = node_from_tag(xml, &index, i, &hash_state, source)?;
                 match stack.last_mut() {
-                    Some(frame) => frame.node.children.push(node),
+                    Some(frame) => {
+                        if frame.node.children.is_empty() {
+                            frame.node.children.reserve_exact(2);
+                        }
+                        frame.node.children.push(node);
+                    }
                     None if node.name == root_tag => return Ok(node),
                     None => (),
                 }
@@ -352,9 +391,14 @@ fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
                 }
                 match stack.pop() {
                     Some(frame) => {
-                        let node = frame.finish();
+                        let node = frame.finish(source);
                         match stack.last_mut() {
-                            Some(parent) => parent.node.children.push(node),
+                            Some(parent) => {
+                                if parent.node.children.is_empty() {
+                                    parent.node.children.reserve_exact(2);
+                                }
+                                parent.node.children.push(node);
+                            }
                             None => return Ok(node),
                         }
                     }
@@ -368,10 +412,10 @@ fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
                     return Err(syntax(start, "unterminated CDATA section"));
                 }
                 if let Some(frame) = stack.last_mut() {
-                    frame.text.push_str(&xml[start + 9..end - 2]);
+                    frame.append_text(Cow::Borrowed(&xml[start + 9..end - 2]));
                 }
                 // The CDATA content is also indexed as a text range.
-                while next_text < ranges.len() && (ranges[next_text].start as usize) < end {
+                while next_text < ranges.len() && (byte_offset(ranges[next_text].start)?) < end {
                     next_text += 1;
                 }
             }
@@ -391,7 +435,7 @@ fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
 
     match stack.pop() {
         Some(frame) => Err(ParseError::UnexpectedEof {
-            tag: frame.node.name,
+            tag: frame.node.name.to_string(),
         }),
         None => Err(ParseError::RootTagNotFound {
             root_tag: root_tag.to_string(),
@@ -400,24 +444,44 @@ fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
 }
 
 #[pyfunction]
+#[allow(clippy::needless_pass_by_value)] // Own Python strings while parsing off the GIL.
 pub fn read_file(py: Python<'_>, file_path: String, root_tag: String) -> PyResult<Py<Node>> {
     let raw = py.detach(|| -> PyResult<RawNode> {
-        let file_str = fs::read_to_string(&file_path)?;
-        Ok(parse_str(&file_str, &root_tag)?)
+        let file_str = fs::read_to_string(file_path)?;
+        Ok(parse_str(&Arc::new(Source::File(file_str)), &root_tag)?)
     })?;
     Node::from_raw(py, raw)
 }
 
 #[pyfunction]
-pub fn read_string(py: Python<'_>, xml_string: String, root_tag: String) -> PyResult<Py<Node>> {
-    let raw = py.detach(|| parse_str(&xml_string, &root_tag))?;
+#[allow(clippy::needless_pass_by_value)] // Own the root name while parsing off the GIL.
+pub fn read_string(
+    py: Python<'_>,
+    xml_string: PyBackedStr,
+    root_tag: String,
+) -> PyResult<Py<Node>> {
+    let source = Arc::new(Source::Python(xml_string));
+    let raw = py.detach(|| parse_str(&source, &root_tag))?;
     Node::from_raw(py, raw)
 }
 
 #[cfg(test)]
 mod tests {
     use crate::f_str;
-    use crate::read::{read_file, read_string};
+    use crate::read::read_file;
+
+    #[allow(clippy::needless_pass_by_value)] // Match owned-string fixture call sites.
+    fn read_string(
+        py: Python<'_>,
+        xml: String,
+        root_tag: String,
+    ) -> pyo3::PyResult<pyo3::Py<crate::entities::Node>> {
+        crate::read::read_string(
+            py,
+            pyo3::types::PyString::new(py, &xml).try_into()?,
+            root_tag,
+        )
+    }
     use pyo3::Python;
     use pyo3::exceptions::{PyFileNotFoundError, PyValueError};
     use std::fs::{File, remove_file};
@@ -575,6 +639,48 @@ mod tests {
             assert_eq!(leaf.text.as_ref().unwrap(), "x");
         });
     }
+    #[test]
+    fn test_text_accumulation_preserves_segments_and_trimming() {
+        let cases = [
+            ("<root>  Україна  </root>", Some("Україна")),
+            ("<root>a<![CDATA[b]]>c&amp;d</root>", Some("abc&d")),
+            ("<root>&amp;<![CDATA[ x ]]></root>", Some("& x")),
+            ("<root><![CDATA[]]>x</root>", Some("x")),
+            ("<root> \t<![CDATA[ \n]]></root>", None),
+            ("<root> a<child/>b </root>", Some("ab")),
+        ];
+        Python::initialize();
+        Python::attach(|py| {
+            for (xml, expected) in cases {
+                let handle = read_string(py, xml.to_owned(), f_str!("root")).unwrap();
+                assert_eq!(handle.borrow(py).text.as_deref(), expected, "{xml}");
+            }
+        });
+    }
+
+    #[test]
+    fn test_plain_fields_are_views_and_decoded_fields_are_owned() {
+        use crate::storage::{Source, XmlText};
+        use std::sync::Arc;
+        let source = Arc::new(Source::File(
+            "<root plain='Україна' escaped='a&amp;b'> text <child/></root>".into(),
+        ));
+        let raw = super::parse_str(&source, "root").unwrap();
+        assert!(matches!(raw.name, XmlText::View { .. }));
+        assert!(matches!(raw.text, Some(XmlText::View { .. })));
+        assert!(
+            raw.attrs
+                .keys()
+                .all(|key| matches!(key, XmlText::View { .. }))
+        );
+        assert!(matches!(raw.attrs.get("plain"), Some(XmlText::View { .. })));
+        assert!(matches!(raw.attrs.get("escaped"), Some(XmlText::Owned(_))));
+        drop(source);
+        assert_eq!(raw.name, "root");
+        assert_eq!(raw.text.as_deref(), Some("text"));
+        assert_eq!(raw.attrs.get("escaped").unwrap(), "a&b");
+    }
+
     #[test]
     fn test_read_malformed_documents_raise_value_error() {
         let cases = [

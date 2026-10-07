@@ -111,6 +111,7 @@ pub fn write_node_to_string(
 }
 
 #[pyfunction]
+#[allow(clippy::needless_pass_by_value)] // PyO3 extracts a guarded node reference by value.
 #[pyo3(signature = (node, file_path, indent=None, default_xml_def=None))]
 pub fn write_file(
     py: Python<'_>,
@@ -119,16 +120,16 @@ pub fn write_file(
     indent: Option<usize>,
     default_xml_def: Option<bool>,
 ) -> PyResult<()> {
-    let _indent = indent.unwrap_or(4);
-    let _default_xml_def = default_xml_def.unwrap_or(true);
+    let indent = indent.unwrap_or(4);
+    let default_xml_def = default_xml_def.unwrap_or(true);
     let raw = node.to_raw(py);
     py.detach(|| -> PyResult<()> {
-        let file = File::create(&file_path)?;
+        let file = File::create(file_path)?;
         let mut buf = BufWriter::new(file);
-        if _default_xml_def {
+        if default_xml_def {
             buf.write_all(XML_DECL.as_bytes())?;
         }
-        let mut emitter = Emitter::new(buf, _indent);
+        let mut emitter = Emitter::new(buf, indent);
         emitter.write_node(raw)?;
         emitter.out.flush()?;
         Ok(())
@@ -136,6 +137,7 @@ pub fn write_file(
 }
 
 #[pyfunction]
+#[allow(clippy::needless_pass_by_value)] // PyO3 extracts a guarded node reference by value.
 #[pyo3(signature = (node, indent=None, default_xml_def=None))]
 pub fn write_string(
     py: Python<'_>,
@@ -143,10 +145,10 @@ pub fn write_string(
     indent: Option<usize>,
     default_xml_def: Option<bool>,
 ) -> PyResult<String> {
-    let _indent = indent.unwrap_or(4);
-    let _default_xml_def = default_xml_def.unwrap_or(true);
+    let indent = indent.unwrap_or(4);
+    let default_xml_def = default_xml_def.unwrap_or(true);
     let raw = node.to_raw(py);
-    py.detach(|| Ok(write_node_to_string(raw, _indent, _default_xml_def)?))
+    py.detach(|| Ok(write_node_to_string(raw, indent, default_xml_def)?))
 }
 
 #[cfg(test)]
@@ -160,24 +162,24 @@ mod tests {
     use std::fs::{read_to_string, remove_file};
     fn root_node() -> RawNode {
         let mut attrs = HashMap::new();
-        attrs.insert(f_str!("test"), f_str!("test"));
+        attrs.insert(f_str!("test").into(), f_str!("test").into());
         let mut root = RawNode {
-            name: f_str!("root"),
+            name: f_str!("root").into(),
             attrs: attrs.clone(),
             children: Vec::new(),
             text: None,
         };
         let mut child = RawNode {
-            name: f_str!("child"),
+            name: f_str!("child").into(),
             attrs,
             children: Vec::new(),
             text: None,
         };
         child.children.push(RawNode {
-            name: f_str!("child"),
+            name: f_str!("child").into(),
             attrs: HashMap::new(),
             children: Vec::new(),
-            text: Some(f_str!("test")),
+            text: Some(f_str!("test").into()),
         });
         root.children.push(child);
         root
@@ -224,7 +226,7 @@ mod tests {
     #[test]
     fn test_write_self_closing_tag() {
         let mut root = RawNode {
-            name: f_str!("root"),
+            name: f_str!("root").into(),
             attrs: HashMap::new(),
             children: Vec::new(),
             text: None,
@@ -232,8 +234,11 @@ mod tests {
         let mut attrs = HashMap::new();
         attrs.insert(f_str!("attr"), f_str!("value"));
         root.children.push(RawNode {
-            name: f_str!("child"),
-            attrs,
+            name: f_str!("child").into(),
+            attrs: attrs
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
             children: Vec::new(),
             text: None,
         });
@@ -250,10 +255,13 @@ mod tests {
         let mut attrs = HashMap::new();
         attrs.insert(f_str!("attr"), f_str!("a & b"));
         let root = RawNode {
-            name: f_str!("root"),
-            attrs,
+            name: f_str!("root").into(),
+            attrs: attrs
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
             children: Vec::new(),
-            text: Some(f_str!("1 < 2 & 3")),
+            text: Some(f_str!("1 < 2 & 3").into()),
         };
         Python::initialize();
         Python::attach(|py| {
@@ -261,7 +269,12 @@ mod tests {
             let xml = write_string(py, node.borrow(py), Some(4), Some(true)).unwrap();
             assert!(xml.contains("a &amp; b"));
             assert!(xml.contains("1 &lt; 2 &amp; 3"));
-            let reread = read_string(py, xml, f_str!("root")).unwrap();
+            let reread = read_string(
+                py,
+                pyo3::types::PyString::new(py, &xml).try_into().unwrap(),
+                f_str!("root"),
+            )
+            .unwrap();
             let reread = reread.borrow(py);
             assert_eq!(reread.attrs.get("attr").unwrap(), "a & b");
             assert_eq!(reread.text.as_ref().unwrap(), "1 < 2 & 3");
@@ -272,8 +285,11 @@ mod tests {
         let mut attrs = HashMap::new();
         attrs.insert(f_str!("attr"), f_str!("line1\nline2\tend"));
         let root = RawNode {
-            name: f_str!("root"),
-            attrs,
+            name: f_str!("root").into(),
+            attrs: attrs
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
             children: Vec::new(),
             text: None,
         };
@@ -283,7 +299,12 @@ mod tests {
             let xml = write_string(py, node.borrow(py), Some(4), Some(true)).unwrap();
             assert!(xml.contains("&#10;"));
             assert!(xml.contains("&#9;"));
-            let reread = read_string(py, xml, f_str!("root")).unwrap();
+            let reread = read_string(
+                py,
+                pyo3::types::PyString::new(py, &xml).try_into().unwrap(),
+                f_str!("root"),
+            )
+            .unwrap();
             let reread = reread.borrow(py);
             assert_eq!(reread.attrs.get("attr").unwrap(), "line1\nline2\tend");
         });
