@@ -50,3 +50,9 @@ include = [
     { path = "py.typed", format = "wheel" },
     { path = "turboxml.pyi", format = "wheel" },
 ]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.414",
+    "ruff>=0.16.10",
+]

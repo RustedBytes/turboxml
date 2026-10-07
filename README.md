@@ -75,10 +75,10 @@ Every parsed element is represented as a `Node`:
 
 ```python
 class Node:
-    name: str                # Tag name
-    attrs: dict[str, str]    # Element attributes
-    children: list[Node]     # Child nodes
-    text: str | None         # Text content, if any
+    name: str  # Tag name
+    attrs: dict[str, str]  # Element attributes
+    children: list[Node]  # Child nodes
+    text: str | None  # Text content, if any
 ```
 
 `children` and `search` results are shared references to the same node objects, not copies — repeated access and traversal are cheap.

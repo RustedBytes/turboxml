@@ -1,6 +1,7 @@
 from enum import Enum
+from typing import TypeAlias
 
-DictTypes = str | dict[str, str] | list[DictTypes] | None
+DictTypes: TypeAlias = str | dict[str, str] | list[DictTypes] | None
 
 class SearchType(Enum):
     Tag: int
@@ -21,8 +22,6 @@ class Node:
         text: str | None = None,
     ) -> Node: ...
     def __to_string(self, spacing: int | None) -> str: ...
-    def __str__(self) -> str: ...
-    def __repr__(self) -> str: ...
     def search(
         self, by: SearchType, value: str, depth: int | None = None
     ) -> list[Node]: ...
