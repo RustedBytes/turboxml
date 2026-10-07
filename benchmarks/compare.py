@@ -18,6 +18,8 @@ from parsing import measure, signature, workloads
 
 def load_extension(path):
     spec = importlib.util.spec_from_file_location("turboxml", str(path.resolve()))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load extension from {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

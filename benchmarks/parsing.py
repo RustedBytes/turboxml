@@ -40,8 +40,7 @@ def workloads():
         "text-heavy",
         "<root>"
         + "".join(
-            '<section id="%d">%s</section>'
-            % (i, ("Plain XML text with Ukrainian: Україна. " * 4096).rstrip())
+            f'<section id="{i}">{("Plain XML text with Ukrainian: Україна. " * 4096).rstrip()}</section>'
             for i in range(32)
         )
         + "</root>",

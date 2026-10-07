@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import TypeAlias
+from typing import Self, TypeAlias
 
 DictTypes: TypeAlias = str | dict[str, str] | list[DictTypes] | None
 
@@ -17,10 +17,10 @@ class Node:
     def __new__(
         cls,
         name: str,
-        attrs: dict[str, str] = dict(),
-        children: list[Node] = list(),
+        attrs: dict[str, str] = {},
+        children: list[Node] = [],
         text: str | None = None,
-    ) -> Node: ...
+    ) -> Self: ...
     def __to_string(self, spacing: int | None) -> str: ...
     def search(
         self, by: SearchType, value: str, depth: int | None = None

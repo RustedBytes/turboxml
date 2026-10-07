@@ -14,7 +14,7 @@ class ReadStringTests(unittest.TestCase):
         def parse(i):
             # No caller-owned persistent XML buffer; each task has different text.
             root = turboxml.read_string(
-                '<root id="%d">%s</root>' % (i, "Україна " * 1024), "root"
+                f'<root id="{i}">{"Україна " * 1024}</root>', "root"
             )
             return root.attrs["id"], root.text
 
