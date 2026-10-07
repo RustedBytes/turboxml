@@ -261,7 +261,12 @@ mod tests {
             let xml = write_string(py, node.borrow(py), Some(4), Some(true)).unwrap();
             assert!(xml.contains("a &amp; b"));
             assert!(xml.contains("1 &lt; 2 &amp; 3"));
-            let reread = read_string(py, xml, f_str!("root")).unwrap();
+            let reread = read_string(
+                py,
+                pyo3::types::PyString::new(py, &xml).try_into().unwrap(),
+                f_str!("root"),
+            )
+            .unwrap();
             let reread = reread.borrow(py);
             assert_eq!(reread.attrs.get("attr").unwrap(), "a & b");
             assert_eq!(reread.text.as_ref().unwrap(), "1 < 2 & 3");
@@ -283,7 +288,12 @@ mod tests {
             let xml = write_string(py, node.borrow(py), Some(4), Some(true)).unwrap();
             assert!(xml.contains("&#10;"));
             assert!(xml.contains("&#9;"));
-            let reread = read_string(py, xml, f_str!("root")).unwrap();
+            let reread = read_string(
+                py,
+                pyo3::types::PyString::new(py, &xml).try_into().unwrap(),
+                f_str!("root"),
+            )
+            .unwrap();
             let reread = reread.borrow(py);
             assert_eq!(reread.attrs.get("attr").unwrap(), "line1\nline2\tend");
         });

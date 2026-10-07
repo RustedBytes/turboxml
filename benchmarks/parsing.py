@@ -57,7 +57,7 @@ def main():
     ap.add_argument('--warmup', type=int, default=5)
     ap.add_argument('--repeats', type=int, default=31)
     ap.add_argument('--iterations', type=int, default=10)
-    ap.add_argument('--output', type=Path, default=Path('benchmarks/results.json'))
+    ap.add_argument('--output', type=Path, default=Path('target/parsing-results.json'))
     args = ap.parse_args()
     if args.warmup < 0 or args.repeats < 20 or args.iterations < 1:
         ap.error('warmup >= 0, repeats >= 20 and iterations >= 1 are required')

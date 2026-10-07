@@ -1,11 +1,12 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::pybacked::PyBackedStr;
 
 use simdxml::index::TagType;
 use simdxml::{SimdXmlError, XmlIndex};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
+use std::collections::hash_map::{Entry, RandomState};
 use std::fmt;
 use std::fs;
 use std::panic::{self, AssertUnwindSafe};
@@ -142,8 +143,12 @@ fn resolve_entity(name: &str, position: usize) -> Result<char, ParseError> {
 /// Parses the attributes of a start tag. `body` is the text after the tag
 /// name up to (not including) the closing `>` or `/>`, and starts at byte
 /// `offset` of the document.
-fn parse_attrs(body: &str, offset: usize) -> Result<HashMap<String, String>, ParseError> {
-    let mut map = HashMap::new();
+fn parse_attrs(
+    body: &str,
+    offset: usize,
+    hash_state: &RandomState,
+) -> Result<HashMap<String, String>, ParseError> {
+    let mut map = HashMap::with_hasher(hash_state.clone());
     let bytes = body.as_bytes();
     let mut pos = 0;
     loop {
@@ -241,11 +246,16 @@ fn element_parts<'a>(
     Ok((name, &xml[body_start..body_end], body_start))
 }
 
-fn node_from_tag(xml: &str, index: &XmlIndex<'_>, i: usize) -> Result<RawNode, ParseError> {
+fn node_from_tag(
+    xml: &str,
+    index: &XmlIndex<'_>,
+    i: usize,
+    hash_state: &RandomState,
+) -> Result<RawNode, ParseError> {
     let (name, body, offset) = element_parts(xml, index, i)?;
     Ok(RawNode {
         name: name.to_string(),
-        attrs: parse_attrs(body, offset)?,
+        attrs: parse_attrs(body, offset, hash_state)?,
         children: Vec::new(),
         text: None,
     })
@@ -253,17 +263,33 @@ fn node_from_tag(xml: &str, index: &XmlIndex<'_>, i: usize) -> Result<RawNode, P
 
 /// An element under construction. Text is accumulated across text segments,
 /// entity references and CDATA sections, and trimmed once on close.
-struct Frame {
+struct Frame<'a> {
     node: RawNode,
-    text: String,
+    text: Option<Cow<'a, str>>,
 }
 
-impl Frame {
+impl<'a> Frame<'a> {
+    fn append_text(&mut self, text: Cow<'a, str>) {
+        if text.is_empty() {
+            return;
+        }
+        match &mut self.text {
+            Some(existing) => existing.to_mut().push_str(&text),
+            None => self.text = Some(text),
+        }
+    }
+
     fn finish(self) -> RawNode {
         let mut node = self.node;
-        let text = self.text.trim();
-        if !text.is_empty() {
-            node.text = Some(text.to_string());
+        if let Some(text) = self.text {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                node.text = Some(if trimmed.len() == text.len() {
+                    text.into_owned()
+                } else {
+                    trimmed.to_owned()
+                });
+            }
         }
         node
     }
@@ -286,6 +312,8 @@ fn build_index(xml: &str) -> Result<XmlIndex<'_>, ParseError> {
 /// intact), tag terminators and attribute syntax while building the tree.
 fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
     let index = build_index(xml)?;
+    // Keep randomized hashing, but initialize its state once per document.
+    let hash_state = RandomState::new();
     let ranges = &index.text_ranges;
     let mut next_text = 0;
     // Open elements outside the requested root; only names are needed.
@@ -308,9 +336,7 @@ fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
                 if let Some(j) = raw.find('<') {
                     return Err(syntax(range.start as usize + j, "unexpected '<'"));
                 }
-                frame
-                    .text
-                    .push_str(&unescape(raw, range.start as usize, false)?);
+                frame.append_text(unescape(raw, range.start as usize, false)?);
             }
         }
 
@@ -320,15 +346,20 @@ fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
                     outer.push(element_parts(xml, &index, i)?.0);
                 } else {
                     stack.push(Frame {
-                        node: node_from_tag(xml, &index, i)?,
-                        text: String::new(),
+                        node: node_from_tag(xml, &index, i, &hash_state)?,
+                        text: None,
                     });
                 }
             }
             TagType::SelfClose => {
-                let node = node_from_tag(xml, &index, i)?;
+                let node = node_from_tag(xml, &index, i, &hash_state)?;
                 match stack.last_mut() {
-                    Some(frame) => frame.node.children.push(node),
+                    Some(frame) => {
+                        if frame.node.children.is_empty() {
+                            frame.node.children.reserve_exact(2);
+                        }
+                        frame.node.children.push(node);
+                    }
                     None if node.name == root_tag => return Ok(node),
                     None => (),
                 }
@@ -354,7 +385,12 @@ fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
                     Some(frame) => {
                         let node = frame.finish();
                         match stack.last_mut() {
-                            Some(parent) => parent.node.children.push(node),
+                            Some(parent) => {
+                                if parent.node.children.is_empty() {
+                                    parent.node.children.reserve_exact(2);
+                                }
+                                parent.node.children.push(node);
+                            }
                             None => return Ok(node),
                         }
                     }
@@ -368,7 +404,7 @@ fn parse_str(xml: &str, root_tag: &str) -> Result<RawNode, ParseError> {
                     return Err(syntax(start, "unterminated CDATA section"));
                 }
                 if let Some(frame) = stack.last_mut() {
-                    frame.text.push_str(&xml[start + 9..end - 2]);
+                    frame.append_text(Cow::Borrowed(&xml[start + 9..end - 2]));
                 }
                 // The CDATA content is also indexed as a text range.
                 while next_text < ranges.len() && (ranges[next_text].start as usize) < end {
@@ -409,7 +445,11 @@ pub fn read_file(py: Python<'_>, file_path: String, root_tag: String) -> PyResul
 }
 
 #[pyfunction]
-pub fn read_string(py: Python<'_>, xml_string: String, root_tag: String) -> PyResult<Py<Node>> {
+pub fn read_string(
+    py: Python<'_>,
+    xml_string: PyBackedStr,
+    root_tag: String,
+) -> PyResult<Py<Node>> {
     let raw = py.detach(|| parse_str(&xml_string, &root_tag))?;
     Node::from_raw(py, raw)
 }
@@ -417,7 +457,19 @@ pub fn read_string(py: Python<'_>, xml_string: String, root_tag: String) -> PyRe
 #[cfg(test)]
 mod tests {
     use crate::f_str;
-    use crate::read::{read_file, read_string};
+    use crate::read::read_file;
+
+    fn read_string(
+        py: Python<'_>,
+        xml: String,
+        root_tag: String,
+    ) -> pyo3::PyResult<pyo3::Py<crate::entities::Node>> {
+        crate::read::read_string(
+            py,
+            pyo3::types::PyString::new(py, &xml).try_into()?,
+            root_tag,
+        )
+    }
     use pyo3::Python;
     use pyo3::exceptions::{PyFileNotFoundError, PyValueError};
     use std::fs::{File, remove_file};
@@ -575,6 +627,25 @@ mod tests {
             assert_eq!(leaf.text.as_ref().unwrap(), "x");
         });
     }
+    #[test]
+    fn test_text_accumulation_preserves_segments_and_trimming() {
+        let cases = [
+            ("<root>  Україна  </root>", Some("Україна")),
+            ("<root>a<![CDATA[b]]>c&amp;d</root>", Some("abc&d")),
+            ("<root>&amp;<![CDATA[ x ]]></root>", Some("& x")),
+            ("<root><![CDATA[]]>x</root>", Some("x")),
+            ("<root> \t<![CDATA[ \n]]></root>", None),
+            ("<root> a<child/>b </root>", Some("ab")),
+        ];
+        Python::initialize();
+        Python::attach(|py| {
+            for (xml, expected) in cases {
+                let handle = read_string(py, xml.to_owned(), f_str!("root")).unwrap();
+                assert_eq!(handle.borrow(py).text.as_deref(), expected, "{xml}");
+            }
+        });
+    }
+
     #[test]
     fn test_read_malformed_documents_raise_value_error() {
         let cases = [

@@ -9,7 +9,7 @@ python -m venv .venv
 python -m pip install maturin
 maturin build --release --locked --interpreter python --out dist
 python -m pip install --force-reinstall dist/*.whl
-python benchmarks/parsing.py --warmup 5 --repeats 31 --iterations 10 --output benchmarks/results.json
+python benchmarks/parsing.py --warmup 5 --repeats 31 --iterations 10 --output target/parsing-results.json
 ```
 
 This benchmark is manual and is not a PR gate. It has no timing threshold.
@@ -43,19 +43,37 @@ it while ElementTree preserves it. All fixtures are checked for identical tree
 content before any timing. Equality failures stop the run instead of publishing
 numbers for unequal outputs.
 
-## Recorded run
+## Comparing two builds
 
-CPython 3.12.14, Linux-6.18.44-x86_64-with-glibc2.39, AMD EPYC 9V74 80-Core Processor; release wheel built from
-`9e3c37ce02ff6cd90ba010f16e7f59c86027cc74` on 2026-10-07.
+For a paired comparison, build the baseline and optimized revisions separately
+in release mode and pass their native extension paths to:
 
-5 warmup batches, 31 measured batches, 10 calls per batch. Times are ms/call.
+```sh
+python benchmarks/compare.py --before /path/to/before/turboxml.so --after /path/to/after/turboxml.so
+```
 
-| Input | UTF-8 bytes | Nodes | ET median | ET p95 | turboxml median | turboxml p95 | Median speedup |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| structured-attributes | 1,047,793 | 30,001 | 18.938 | 22.413 | 16.442 | 18.490 | 1.152× |
-| deep-nested | 321,813 | 12,901 | 5.842 | 6.181 | 5.967 | 6.289 | 0.979× |
-| text-heavy | 6,161,219 | 33 | 10.822 | 11.304 | 1.582 | 2.024 | 6.842× |
+Use the same Python, Rust toolchain and build flags for both builds. Native
+module filenames are platform-specific (`.so` on Linux, `.pyd` on Windows).
+The helper uses the same fixtures, equality checks, 5 warmup batches and
+31 measured batches of 10 calls, rotating all three parser orders. JSON output
+is local under ignored `target/`; results are not checked into the repository.
 
-This is one run in a shared virtualized environment, not a universal speedup
-guarantee. The nested input was slightly slower with turboxml. Raw batch samples
-and environment/build provenance are in [results.json](results.json).
+## Recorded optimization comparison
+
+CPython 3.12.14, Linux x86-64, AMD EPYC 9V74, 2026-10-07. Baseline source:
+`9e3c37ce02ff6cd90ba010f16e7f59c86027cc74`. Both native extensions used the same
+locked dependencies, release profile and `pyo3/extension-module` feature. Timings
+include tree destruction; p95 describes batch means. Parser order rotates in
+one process: 5 warmup batches, 31 measured batches, 10 calls per batch.
+
+| Input | Bytes | Before median / p95 (ms) | After median / p95 (ms) | ET median / p95 (ms) | Before / after median | ET / after median |
+|---|---:|---:|---:|---:|---:|---:|
+| structured-attributes | 1,047,793 | 14.759 / 16.847 | 12.782 / 13.809 | 19.726 / 23.362 | 1.155× | 1.543× |
+| deep-nested | 321,813 | 5.408 / 5.996 | 4.645 / 5.026 | 6.178 / 7.356 | 1.164× | 1.330× |
+| text-heavy | 6,161,219 | 1.669 / 1.917 | 1.178 / 1.270 | 10.973 / 12.196 | 1.417× | 9.314× |
+
+Shared virtualized environment; a single paired run is not a universal speedup
+guarantee. These results do not establish a typical 1.5–2.5× structured-XML
+speedup across documents and machines. No raw results JSON is tracked.
+
+Optimized `src/read.rs` SHA-256: `240e0a821c71b5d615e4f6f5bf2032e532af8e1a4b9fa0025f0966c71dcf260c`.

@@ -5,7 +5,7 @@
 
 A fast, lightweight Python library for reading and writing XML files, powered by Rust.
 
-In a [recorded manual benchmark](benchmarks/README.md#recorded-run) on CPython 3.12.14 / Linux x86-64, `turboxml` achieved **1.15×** the throughput of `xml.etree.ElementTree` for structured XML with attributes, **0.98×** for deeply nested XML, and **6.84×** for text-heavy XML. These are three synthetic workloads on one machine, not a typical-speedup guarantee; results depend on the document, Python version, hardware, and build. The benchmark measures full-tree parsing and destruction through each library's public API.
+In a [recorded manual benchmark](benchmarks/README.md#recorded-optimization-comparison) on CPython 3.12.14 / Linux x86-64, `turboxml` achieved **1.54×** the throughput of `xml.etree.ElementTree` for structured XML with attributes, **1.33×** for deeply nested XML, and **9.31×** for text-heavy XML. These are three synthetic workloads on one machine, not a typical-speedup guarantee; results depend on the document, Python version, hardware, and build. The benchmark measures full-tree parsing and destruction through each library's public API.
 
 ---
 
