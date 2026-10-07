@@ -111,6 +111,7 @@ pub fn write_node_to_string(
 }
 
 #[pyfunction]
+#[allow(clippy::needless_pass_by_value)] // PyO3 extracts a guarded node reference by value.
 #[pyo3(signature = (node, file_path, indent=None, default_xml_def=None))]
 pub fn write_file(
     py: Python<'_>,
@@ -119,16 +120,16 @@ pub fn write_file(
     indent: Option<usize>,
     default_xml_def: Option<bool>,
 ) -> PyResult<()> {
-    let _indent = indent.unwrap_or(4);
-    let _default_xml_def = default_xml_def.unwrap_or(true);
+    let indent = indent.unwrap_or(4);
+    let default_xml_def = default_xml_def.unwrap_or(true);
     let raw = node.to_raw(py);
     py.detach(|| -> PyResult<()> {
-        let file = File::create(&file_path)?;
+        let file = File::create(file_path)?;
         let mut buf = BufWriter::new(file);
-        if _default_xml_def {
+        if default_xml_def {
             buf.write_all(XML_DECL.as_bytes())?;
         }
-        let mut emitter = Emitter::new(buf, _indent);
+        let mut emitter = Emitter::new(buf, indent);
         emitter.write_node(raw)?;
         emitter.out.flush()?;
         Ok(())
@@ -136,6 +137,7 @@ pub fn write_file(
 }
 
 #[pyfunction]
+#[allow(clippy::needless_pass_by_value)] // PyO3 extracts a guarded node reference by value.
 #[pyo3(signature = (node, indent=None, default_xml_def=None))]
 pub fn write_string(
     py: Python<'_>,
@@ -143,10 +145,10 @@ pub fn write_string(
     indent: Option<usize>,
     default_xml_def: Option<bool>,
 ) -> PyResult<String> {
-    let _indent = indent.unwrap_or(4);
-    let _default_xml_def = default_xml_def.unwrap_or(true);
+    let indent = indent.unwrap_or(4);
+    let default_xml_def = default_xml_def.unwrap_or(true);
     let raw = node.to_raw(py);
-    py.detach(|| Ok(write_node_to_string(raw, _indent, _default_xml_def)?))
+    py.detach(|| Ok(write_node_to_string(raw, indent, default_xml_def)?))
 }
 
 #[cfg(test)]

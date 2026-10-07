@@ -189,14 +189,11 @@ fn parse_attrs(
         while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
             pos += 1;
         }
-        let quote = match bytes.get(pos) {
-            Some(&q @ (b'"' | b'\'')) => q,
-            _ => {
-                return Err(syntax(
-                    offset + pos,
-                    format!("value of attribute '{key}' is not quoted"),
-                ));
-            }
+        let Some(&quote @ (b'"' | b'\'')) = bytes.get(pos) else {
+            return Err(syntax(
+                offset + pos,
+                format!("value of attribute '{key}' is not quoted"),
+            ));
         };
         pos += 1;
         let value_start = pos;
@@ -228,15 +225,20 @@ fn parse_attrs(
     }
 }
 
-/// Validates an element tag at index `i` and returns its name and the byte
-/// range of its attribute section.
+/// Converts an index offset without truncation on 32-bit targets.
+fn byte_offset(offset: u64) -> Result<usize, ParseError> {
+    usize::try_from(offset)
+        .map_err(|_| syntax(0, "XML index offset exceeds addressable input size"))
+}
+
+/// Validates an element tag and returns its name and attribute byte range.
 fn element_parts<'a>(
     xml: &'a str,
     index: &XmlIndex<'a>,
     i: usize,
 ) -> Result<(&'a str, &'a str, usize), ParseError> {
-    let start = index.tag_starts[i] as usize;
-    let end = index.tag_ends[i] as usize;
+    let start = byte_offset(index.tag_starts[i])?;
+    let end = byte_offset(index.tag_ends[i])?;
     let name = index.tag_name(i);
     if name.is_empty() {
         return Err(syntax(start, "expected element name after '<'"));
@@ -314,6 +316,7 @@ fn build_index(xml: &str) -> Result<XmlIndex<'_>, ParseError> {
 /// without checking well-formedness, so this walk validates nesting (matching
 /// by depth, not tag name, keeps children that share an ancestor's name
 /// intact), tag terminators and attribute syntax while building the tree.
+#[allow(clippy::too_many_lines)] // Keep the ordered XML state-machine transitions in one walk.
 fn parse_str(source: &Arc<Source>, root_tag: &str) -> Result<RawNode, ParseError> {
     let xml = source.as_str();
     let index = build_index(xml)?;
@@ -327,21 +330,21 @@ fn parse_str(source: &Arc<Source>, root_tag: &str) -> Result<RawNode, ParseError
     let mut stack: Vec<Frame> = Vec::new();
 
     for i in 0..index.tag_count() {
-        let start = index.tag_starts[i] as usize;
-        let end = index.tag_ends[i] as usize;
+        let start = byte_offset(index.tag_starts[i])?;
+        let end = byte_offset(index.tag_ends[i])?;
         if end >= xml.len() {
             return Err(syntax(start, "unterminated markup"));
         }
 
-        while next_text < ranges.len() && (ranges[next_text].start as usize) < start {
+        while next_text < ranges.len() && (byte_offset(ranges[next_text].start)?) < start {
             let range = &ranges[next_text];
             next_text += 1;
             if let Some(frame) = stack.last_mut() {
                 let raw = index.text_content(range);
                 if let Some(j) = raw.find('<') {
-                    return Err(syntax(range.start as usize + j, "unexpected '<'"));
+                    return Err(syntax(byte_offset(range.start)? + j, "unexpected '<'"));
                 }
-                frame.append_text(unescape(raw, range.start as usize, false)?);
+                frame.append_text(unescape(raw, byte_offset(range.start)?, false)?);
             }
         }
 
@@ -412,7 +415,7 @@ fn parse_str(source: &Arc<Source>, root_tag: &str) -> Result<RawNode, ParseError
                     frame.append_text(Cow::Borrowed(&xml[start + 9..end - 2]));
                 }
                 // The CDATA content is also indexed as a text range.
-                while next_text < ranges.len() && (ranges[next_text].start as usize) < end {
+                while next_text < ranges.len() && (byte_offset(ranges[next_text].start)?) < end {
                     next_text += 1;
                 }
             }
@@ -441,15 +444,17 @@ fn parse_str(source: &Arc<Source>, root_tag: &str) -> Result<RawNode, ParseError
 }
 
 #[pyfunction]
+#[allow(clippy::needless_pass_by_value)] // Own Python strings while parsing off the GIL.
 pub fn read_file(py: Python<'_>, file_path: String, root_tag: String) -> PyResult<Py<Node>> {
     let raw = py.detach(|| -> PyResult<RawNode> {
-        let file_str = fs::read_to_string(&file_path)?;
+        let file_str = fs::read_to_string(file_path)?;
         Ok(parse_str(&Arc::new(Source::File(file_str)), &root_tag)?)
     })?;
     Node::from_raw(py, raw)
 }
 
 #[pyfunction]
+#[allow(clippy::needless_pass_by_value)] // Own the root name while parsing off the GIL.
 pub fn read_string(
     py: Python<'_>,
     xml_string: PyBackedStr,
@@ -465,6 +470,7 @@ mod tests {
     use crate::f_str;
     use crate::read::read_file;
 
+    #[allow(clippy::needless_pass_by_value)] // Match owned-string fixture call sites.
     fn read_string(
         py: Python<'_>,
         xml: String,

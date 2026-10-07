@@ -90,7 +90,7 @@ The workflow is [.github/workflows/ci.yml](.github/workflows/ci.yml).
   GitHub evaluates PR path filters against the full PR diff, so a documentation
   update inside an existing code PR can still trigger CI.
 - Normal runs check Rust formatting/lints/tests and install/test native wheels
-  on CPython 3.12 and PyPy 3.12. Superseded PR/main runs are cancelled.
+  on CPython 3.12, CPython 3.15 and PyPy 3.12. Superseded PR/main runs are cancelled.
 - Version tags matching `v[0-9]*` run the full platform wheel matrix and sdist,
   then publish after all builds and installed-wheel smoke tests pass. GitHub
   does not apply push path filters to tags.
@@ -109,3 +109,7 @@ If you encounter a bug or have a feature request, please [open an issue](https:/
 - Your Python and Rust versions
 - Your operating system
 - A minimal reproducible example (if applicable)
+
+Clippy enables `pedantic` in `Cargo.toml` for local and CI runs. CI treats all
+warnings as errors. Any lint exception must be scoped and explain its reason.
+The Python 3.15 smoke job permits prereleases while 3.15 is in its release cycle.

@@ -4,6 +4,10 @@
 
 ### Added
 
+- Python 3.15 package classifier and installed-wheel regression tests in CI.
+- Enable Clippy pedantic checks locally and in CI, with scoped documented
+  exceptions for PyO3 argument extraction and the XML state-machine walk.
+
 - Reproducible manual benchmarks against `xml.etree.ElementTree` for structured
   XML with attributes, deep nesting, and text-heavy UTF-8 documents. Record
   input sizes, warmup/repeats, median/p95 and interpreter/platform metadata.
@@ -35,6 +39,9 @@
   regression smoke tests for CPython and PyPy.
 
 ### Fixed
+
+- Check conversion of XML index offsets to pointer-sized integers rather than
+  silently truncating them on 32-bit targets; address pedantic lint warnings.
 
 - Remove redundant `XmlText` conversions in writer test fixtures that caused
   `cargo clippy --all-targets -- -D warnings` to fail.
