@@ -28,6 +28,12 @@
 - Replace general README performance claims with links to measured synthetic
   results, reproduction instructions and limitations.
 
+- Rename the workflow to `ci.yml`, filter normal CI to code/test/packaging
+  changes, skip draft PR checks and cancel obsolete PR/main runs. Keep the full
+  artifact matrix for version tags or an explicit manual request; publishing
+  requires a version tag or the manual `publish` option. Add installed-wheel
+  regression smoke tests for CPython and PyPy.
+
 ### Fixed
 
 - Remove redundant `XmlText` conversions in writer test fixtures that caused
